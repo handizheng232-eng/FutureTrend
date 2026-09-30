@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.hermes-tmp.*
+趋势跟踪与技术分析文献/
+*.zip
+*.png
+*.log
+.DS_Store
+Thumbs.db
