@@ -52,7 +52,9 @@ python serve.py
 
 浏览器访问：`http://127.0.0.1:8765/`
 
-公开静态站点：`https://handizheng232-eng.github.io/FutureTrend/`
+GitHub Pages 启用后访问：`https://handizheng232-eng.github.io/FutureTrend/`
+
+仓库设置：`Settings → Pages → Deploy from a branch → main / (root) → Save`。
 
 ## 趋势计算原则
 
