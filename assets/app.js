@@ -11,7 +11,7 @@
   const scoreClass=v=>v>=18?'bull':v<=-18?'bear':'flat';
   const valueClass=v=>v>0?'positive':v<0?'negative':'';
   const boardColor={金融股指:'#7c3aed',金融国债:'#2563eb',贵金属:'#d29a17',有色金属:'#d35400',黑色建材:'#606975',能源:'#0d9488',能源化工:'#0891b2',农产品:'#65a30d',橡胶:'#be185d',新能源材料:'#ea580c',林木浆纸:'#8b5e3c',航运指数:'#0369a1',其他:'#64748b'};
-  const state={data:null,rows:[],system:'multi',preset:'balanced',params:{},sortKey:'baselineScore',sortDir:-1,charts:{},renderToken:0,selected:'CU',detailRange:756};
+  const state={data:null,rows:[],system:'multi',preset:'balanced',params:{},sortKey:'baselineScore',sortDir:-1,charts:{},renderToken:0,selected:'CU',detailRange:756,emergenceLong:252,emergenceShort:60};
 
   const systems={
     donchian:{name:'收盘价通道突破',short:'价格突破系统',code:'CB / DONCHIAN',structure:'季度通道 + 半年度均线斜率 + ATR标准化',use:'捕捉持续性大趋势',formula:'平衡档：60日收盘通道 + MA120趋势过滤 + 60日斜率',logic:'用不含当日的60日历史最高、最低收盘价定义季度突破，再以120日均线及其60日斜率过滤逆势信号，并用ATR把不同价格尺度转成可比强度。',strength:'规则直接、方向定义清晰；20/60/120日档位分别对应月度、季度、半年度观察。',risk:'震荡市场会出现连续假突破；未复权主力连续的换月跳点可能被误判为突破。',source:'《趋势跟踪》PDF p.561、570–572；唐奇安背景见 p.141–146。季度/半年度参数为网页透明研究口径。',params:[['entry','入场通道',20,500,5,'交易日'],['exit','反转通道',10,500,5,'交易日'],['trendMA','趋势均线',20,500,5,'交易日'],['slopeLookback','斜率观察',5,252,5,'交易日'],['atrPeriod','ATR周期',5,80,1,'交易日'],['volumeLookback','成交量基期',5,120,5,'交易日'],['oiLookback','持仓观察',5,120,5,'交易日']]},
@@ -47,8 +47,8 @@
       state.data=await r.json();
       state.params={...E.presets[state.system][state.preset]};
       state.rows=state.data.universe.map(x=>{
-        const s=state.data.series[x.symbol],base=E.evaluate('multi',E.presets.multi.balanced,s),emergence=E.evaluateEmergence(s);
-        return {...x,board:topBoard(x.sector),asset:assetClass(x),ret60:retAt(s,60),ret120:retAt(s,120),ret252:retAt(s,252),volumeRatio60:E.indicators.volumeRatio(s,60),oiChange60:E.indicators.oiChange(s,60),natr:natr(s),baselineScore:base?.score??null,baselineDirection:base?.direction??'—',emergence};
+        const s=state.data.series[x.symbol],base=E.evaluate('multi',E.presets.multi.balanced,s);
+        return {...x,board:topBoard(x.sector),asset:assetClass(x),ret60:retAt(s,60),ret120:retAt(s,120),ret252:retAt(s,252),volumeRatio60:E.indicators.volumeRatio(s,60),oiChange60:E.indicators.oiChange(s,60),natr:natr(s),baselineScore:base?.score??null,baselineDirection:base?.direction??'—',emergence:null,emergenceCache:{}};
       });
       initFilters();renderOverview();renderSystemCards();initLab();initEmergence();initDetail();updateRelativeStrength();
       const m=state.data.meta;$('#market-clock').textContent=`市场日 ${m.market_date} · 日线源 · 季度/半年度`;$('#footer-meta').textContent=`${m.source} · ${m.universe_count}品种 · ${m.market_date}`;
@@ -133,19 +133,44 @@
     $$('#rs-table tbody tr').forEach(tr=>tr.addEventListener('click',()=>selectDetail(tr.dataset.symbol,true)));
   }
 
-  function initEmergence(){renderEmergence()}
+  const horizonLabels={60:'季度（60日）',120:'半年度（120日）',252:'一年（252日）',504:'两年（504日）',756:'三年（756日）',1260:'五年（1260日）'};
+  function horizonLabel(days){return horizonLabels[days]||`${days}日`}
+  function emergenceFor(row){
+    const key=`${state.emergenceLong}:${state.emergenceShort}`,cache=row.emergenceCache??={};
+    if(!Object.prototype.hasOwnProperty.call(cache,key))cache[key]=E.evaluateEmergence(state.data.series[row.symbol],undefined,{longHorizon:state.emergenceLong,shortHorizon:state.emergenceShort});
+    return cache[key];
+  }
+  function initEmergence(){
+    $('#em-long').value=String(state.emergenceLong);$('#em-short').value=String(state.emergenceShort);
+    $('#em-long').addEventListener('change',e=>{state.emergenceLong=+e.target.value;renderEmergence()});
+    $('#em-short').addEventListener('change',e=>{state.emergenceShort=+e.target.value;renderEmergence()});
+    renderEmergence();
+  }
   function renderEmergence(){
     if(!state.data||!$('#emergence-scatter'))return;
+    state.rows.forEach(x=>x.emergence=emergenceFor(x));
+    const longLabel=horizonLabel(state.emergenceLong),shortLabel=horizonLabel(state.emergenceShort),samePeriod=state.emergenceLong===state.emergenceShort;
     const all=state.rows.filter(x=>x.emergence),candidateStates=['临界突破观察','趋势潜伏'];
     $('#em-valid').textContent=all.length;$('#em-latent').textContent=all.filter(x=>x.emergence.state==='趋势潜伏').length;$('#em-breakout').textContent=all.filter(x=>x.emergence.state==='临界突破观察').length;$('#em-high').textContent=all.filter(x=>candidateStates.includes(x.emergence.state)&&x.emergence.score>=60).length;
+    $('#em-valid-note').textContent=all.length===state.rows.length?'全部品种可计算':`历史不足 ${state.rows.length-all.length} 个`;
+    $('#em-period-summary').textContent=`横轴 ${longLabel} / 纵轴 ${shortLabel}`;
+    $('#em-period-note').textContent=samePeriod?'长短周期均选一年：此时是同窗口不同特征的对照，不属于严格的跨周期错位。':`当前组合以${longLabel}识别长期方向，以${shortLabel}识别整理、弱趋势或启动状态。`;
+    $('#em-scatter-title').textContent=`${longLabel}长期方向迹象 × ${shortLabel}趋势状态`;
+    $('#em-scatter-note').textContent=`横轴为${longLabel}长期方向迹象，纵轴为${shortLabel}趋势；气泡越大，趋势萌芽观察优先级越高。横轴两端且纵轴靠近0是重点区域。`;
+    $('#em-long-col').textContent=`${longLabel}迹象`;$('#em-short-col').textContent=`${shortLabel}趋势`;
+    $('#em-method-long').textContent=`所选${longLabel}收益、半窗口收益、价格相对半窗口/全窗口均线的位置，以及半窗口均线斜率，共同形成有方向的长期迹象分。`;
+    $('#em-method-short').textContent=`所选${shortLabel}收益、对应均线位置和均线斜率形成短周期趋势分；绝对值越低，越符合“长期已有方向、短周期仍未充分启动”。`;
+    $('#em-method-compression').textContent=`所选${shortLabel}价格路径效率越低、ATR20相对该窗口ATR越低，越接近盘整或波动收缩。`;
+    $('#em-method-boundary').textContent=`偏多品种看价格接近所选${shortLabel}区间上沿，偏空品种看接近下沿；边界越近，突破观察优先级越高。`;
+    $('#em-method-participation').textContent=`按所选${shortLabel}计算成交量比与持仓变化，并依长期方向加减分；只描述参与度，不识别主动多空。`;
     const board=$('#em-board').value,direction=$('#em-direction').value,status=$('#em-state').value;
     const rows=all.filter(x=>(!board||x.board===board)&&(!direction||x.emergence.direction===direction)&&(status==='candidate'?candidateStates.includes(x.emergence.state):!status||x.emergence.state===status)).sort((a,b)=>b.emergence.score-a.emergence.score);
     $('#em-count').textContent=`${rows.length}个品种`;
     const chart=state.charts.emergence??=echarts.init($('#emergence-scatter'));
-    const data=rows.map(x=>{const e=x.emergence,c=e.components;return{name:x.name,value:[c.longBias,c.quarterTrend,e.score,x.symbol,x.board,e.direction,e.state,c.boundary,c.compression],itemStyle:{color:e.direction==='偏多'?'#c2362b':'#16805d',opacity:.78},label:{show:e.score>=65}}});
-    chart.setOption({animationDuration:350,grid:{left:62,right:30,top:28,bottom:55},tooltip:{trigger:'item',formatter:p=>{const v=p.value;return `<b>${esc(p.name)} · ${esc(v[3])}</b><br>${esc(v[4])} / ${esc(v[5])}<br>状态 ${esc(v[6])}<br>萌芽分 ${fmt(v[2],1)}<br>长期迹象 ${v[0]>0?'+':''}${fmt(v[0],1)}<br>季度趋势 ${v[1]>0?'+':''}${fmt(v[1],1)}<br>边界 ${fmt(v[7],1)} / 压缩 ${fmt(v[8],1)}`}},xAxis:{type:'value',min:-100,max:100,name:'← 偏空长期迹象｜偏多长期迹象 →',nameLocation:'middle',nameGap:36,axisLabel:{fontSize:9},splitLine:{lineStyle:{color:'#e6e8ec'}}},yAxis:{type:'value',min:-100,max:100,name:'季度趋势',axisLabel:{fontSize:9},splitLine:{lineStyle:{color:'#e6e8ec'}}},series:[{type:'scatter',data,symbolSize:v=>Math.max(10,Math.min(38,8+v[2]*.36)),label:{formatter:p=>p.value[3],position:'top',fontSize:9,color:'#303844'},emphasis:{focus:'self',label:{show:true}},markArea:{silent:true,itemStyle:{color:'rgba(37,99,235,.06)'},label:{show:true,formatter:'季度弱趋势 / 震荡带',color:'#6b7280',fontSize:10},data:[[{yAxis:-25},{yAxis:25}]]},markLine:{silent:true,symbol:'none',lineStyle:{color:'#9aa1a9',type:'dashed'},data:[{xAxis:0},{yAxis:0},{xAxis:30},{xAxis:-30}]}}]},{notMerge:true});
-    $('#emergence-table tbody').innerHTML=rows.slice(0,30).map(x=>{const e=x.emergence,c=e.components;return `<tr data-symbol="${esc(x.symbol)}"><td class="instrument"><strong>${esc(x.name)}</strong><small>${esc(x.symbol)}0 · ${esc(x.board)}</small></td><td><span class="tag ${e.direction==='偏多'?'bull':'bear'}">${esc(e.direction)} · ${esc(e.state)}</span></td><td><b class="${e.score>=60?'positive':''}">${fmt(e.score,1)}</b></td><td class="${valueClass(c.longBias)}">${c.longBias>0?'+':''}${fmt(c.longBias,1)}</td><td class="${valueClass(c.quarterTrend)}">${c.quarterTrend>0?'+':''}${fmt(c.quarterTrend,1)}</td><td>${fmt(c.boundary,1)}</td><td>${fmt(c.compression,1)}</td></tr>`}).join('');
-    $$('#emergence-table tbody tr').forEach(tr=>tr.addEventListener('click',()=>selectDetail(tr.dataset.symbol,true)));
+    const data=rows.map(x=>{const e=x.emergence,c=e.components;return{name:x.name,value:[c.longBias,c.shortTrend,e.score,x.symbol,x.board,e.direction,e.state,c.boundary,c.compression],itemStyle:{color:e.direction==='偏多'?'#c2362b':'#16805d',opacity:.78},label:{show:e.score>=65}}});
+    chart.setOption({animationDuration:350,grid:{left:66,right:30,top:28,bottom:62},tooltip:{trigger:'item',formatter:p=>{const v=p.value;return `<b>${esc(p.name)} · ${esc(v[3])}</b><br>${esc(v[4])} / ${esc(v[5])}<br>状态 ${esc(v[6])}<br>萌芽分 ${fmt(v[2],1)}<br>${esc(longLabel)}迹象 ${v[0]>0?'+':''}${fmt(v[0],1)}<br>${esc(shortLabel)}趋势 ${v[1]>0?'+':''}${fmt(v[1],1)}<br>边界 ${fmt(v[7],1)} / 压缩 ${fmt(v[8],1)}`}},xAxis:{type:'value',min:-100,max:100,name:`← 偏空${longLabel}迹象｜偏多${longLabel}迹象 →`,nameLocation:'middle',nameGap:39,axisLabel:{fontSize:9},splitLine:{lineStyle:{color:'#e6e8ec'}}},yAxis:{type:'value',min:-100,max:100,name:`${shortLabel}趋势`,nameGap:48,axisLabel:{fontSize:9},splitLine:{lineStyle:{color:'#e6e8ec'}}},series:[{type:'scatter',data,symbolSize:v=>Math.max(10,Math.min(38,8+v[2]*.36)),label:{formatter:p=>p.value[3],position:'top',fontSize:9,color:'#303844'},emphasis:{focus:'self',label:{show:true}},markArea:{silent:true,itemStyle:{color:'rgba(37,99,235,.06)'},label:{show:true,formatter:`${shortLabel}弱趋势 / 震荡带`,color:'#6b7280',fontSize:10},data:[[{yAxis:-25},{yAxis:25}]]},markLine:{silent:true,symbol:'none',lineStyle:{color:'#9aa1a9',type:'dashed'},data:[{xAxis:0},{yAxis:0},{xAxis:30},{xAxis:-30}]}}]},{notMerge:true});
+    $('#emergence-table tbody').innerHTML=rows.length?rows.slice(0,30).map(x=>{const e=x.emergence,c=e.components;return `<tr data-symbol="${esc(x.symbol)}"><td class="instrument"><strong>${esc(x.name)}</strong><small>${esc(x.symbol)}0 · ${esc(x.board)}</small></td><td><span class="tag ${e.direction==='偏多'?'bull':'bear'}">${esc(e.direction)} · ${esc(e.state)}</span></td><td><b class="${e.score>=60?'positive':''}">${fmt(e.score,1)}</b></td><td class="${valueClass(c.longBias)}">${c.longBias>0?'+':''}${fmt(c.longBias,1)}</td><td class="${valueClass(c.shortTrend)}">${c.shortTrend>0?'+':''}${fmt(c.shortTrend,1)}</td><td>${fmt(c.boundary,1)}</td><td>${fmt(c.compression,1)}</td></tr>`}).join(''):`<tr><td colspan="7" class="empty-row">当前筛选和周期组合下没有符合条件的品种。</td></tr>`;
+    $$('#emergence-table tbody tr[data-symbol]').forEach(tr=>tr.addEventListener('click',()=>selectDetail(tr.dataset.symbol,true)));
   }
 
   function initDetail(){

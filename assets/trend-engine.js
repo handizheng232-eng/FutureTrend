@@ -178,36 +178,42 @@
     return path?Math.abs(values[end]-values[end-lookback])/path:0;
   }
   function evaluateEmergence(series,end=series.c.length-1,p={}){
-    const q=p.quarter||60,h=p.halfYear||120,y=p.year||252;
-    if(end<Math.max(y,h+q,130))return null;
-    const c=series.c[end],a20=atr(series,20,end)||Math.abs(c)*.01,a120=atr(series,120,end)||a20;
-    const risk=Math.max(a20/c,.004),rq=pct(c,series.c[end-q]),rh=pct(c,series.c[end-h]),ry=pct(c,series.c[end-y]);
-    const maQ=sma(series.c,q,end),maQ0=sma(series.c,q,end-20),maH=sma(series.c,h,end),maH0=sma(series.c,h,end-q),maY=sma(series.c,y,end);
+    const longHorizon=Math.max(2,Math.round(p.longHorizon||p.year||252));
+    const shortHorizon=Math.max(2,Math.round(p.shortHorizon||p.quarter||60));
+    const longMid=Math.max(60,Math.round(longHorizon/2));
+    const slopeLookback=Math.max(10,Math.round(shortHorizon/3));
+    if(end<Math.max(longHorizon,longMid+slopeLookback,shortHorizon+slopeLookback))return null;
+    const c=series.c[end],a20=atr(series,20,end)||Math.abs(c)*.01,aShort=atr(series,shortHorizon,end)||a20;
+    const risk=Math.max(a20/c,.004);
+    const rShort=pct(c,series.c[end-shortHorizon]),rMid=pct(c,series.c[end-longMid]),rLong=pct(c,series.c[end-longHorizon]);
+    const maShort=sma(series.c,shortHorizon,end),maShort0=sma(series.c,shortHorizon,end-slopeLookback);
+    const maMid=sma(series.c,longMid,end),maMid0=sma(series.c,longMid,end-slopeLookback),maLong=sma(series.c,longHorizon,end);
     const longBias=clamp(
-      32*Math.tanh(rh/Math.max(risk*Math.sqrt(h)*1.2,.01))+
-      23*Math.tanh(ry/Math.max(risk*Math.sqrt(y)*1.5,.01))+
-      20*Math.tanh((c-maH)/Math.max(a20*4,1e-9))+
-      15*Math.tanh((maH-maH0)/Math.max(a20*3,1e-9))+
-      10*Math.tanh((c-maY)/Math.max(a20*6,1e-9))
+      30*Math.tanh(rLong/Math.max(risk*Math.sqrt(longHorizon)*1.5,.01))+
+      20*Math.tanh(rMid/Math.max(risk*Math.sqrt(longMid)*1.2,.01))+
+      20*Math.tanh((c-maMid)/Math.max(a20*4,1e-9))+
+      15*Math.tanh((maMid-maMid0)/Math.max(a20*3,1e-9))+
+      15*Math.tanh((c-maLong)/Math.max(a20*6,1e-9))
     );
-    const quarterTrend=clamp(
-      50*Math.tanh(rq/Math.max(risk*Math.sqrt(q),.01))+
-      25*Math.tanh((c-maQ)/Math.max(a20*3,1e-9))+
-      25*Math.tanh((maQ-maQ0)/Math.max(a20*2,1e-9))
+    const shortTrend=clamp(
+      50*Math.tanh(rShort/Math.max(risk*Math.sqrt(shortHorizon),.01))+
+      25*Math.tanh((c-maShort)/Math.max(a20*3,1e-9))+
+      25*Math.tanh((maShort-maShort0)/Math.max(a20*2,1e-9))
     );
-    const er=efficiencyRatio(series.c,q,end),atrRatio=a120?a20/a120:null;
+    const er=efficiencyRatio(series.c,shortHorizon,end),atrRatio=aShort?a20/aShort:null;
     const volatilityCompression=atrRatio==null?50:clamp(100*(1.1-atrRatio)/.5,0,100);
     const compression=clamp(65*(1-(er??1))+35*volatilityCompression/100,0,100);
-    const prior=series.c.slice(end-q,end),hi=Math.max(...prior),lo=Math.min(...prior),pos=hi>lo?clamp(100*(c-lo)/(hi-lo),0,100):50;
-    const dir=Math.sign(longBias)||Math.sign(rh)||1,boundary=dir>0?pos:100-pos;
-    const vr=volumeRatio(series,p.volumeLookback||60,end),oi=oiChange(series,p.oiLookback||60,end);
+    const prior=series.c.slice(end-shortHorizon,end),hi=Math.max(...prior),lo=Math.min(...prior),pos=hi>lo?clamp(100*(c-lo)/(hi-lo),0,100):50;
+    const dir=Math.sign(longBias)||Math.sign(rLong)||1,boundary=dir>0?pos:100-pos;
+    const participationLookback=Math.max(20,Math.round(p.participationLookback||shortHorizon));
+    const vr=volumeRatio(series,participationLookback,end),oi=oiChange(series,participationLookback,end);
     let participation=50;
     if(vr!=null)participation+=dir*clamp((vr-1)*30,-20,20);
     if(oi!=null)participation+=dir*clamp(oi*150,-30,30);
     participation=clamp(participation,0,100);
-    const shortPause=clamp(100*(1-Math.abs(quarterTrend)/55),0,100);
+    const shortPause=clamp(100*(1-Math.abs(shortTrend)/55),0,100);
     let score=.35*Math.abs(longBias)+.25*shortPause+.15*compression+.15*boundary+.10*participation;
-    const sameDirection=Math.sign(quarterTrend)===dir,established=sameDirection&&Math.abs(quarterTrend)>=45,conflict=!sameDirection&&Math.abs(quarterTrend)>=35;
+    const sameDirection=Math.sign(shortTrend)===dir,established=sameDirection&&Math.abs(shortTrend)>=45,conflict=!sameDirection&&Math.abs(shortTrend)>=35;
     if(Math.abs(longBias)<20)score*=.6;if(established)score*=.65;if(conflict)score*=.55;score=clamp(score,0,100);
     let state='普通震荡';
     if(established)state='趋势已确认';
@@ -215,7 +221,7 @@
     else if(Math.abs(longBias)>=30&&shortPause>=45&&boundary>=72)state='临界突破观察';
     else if(Math.abs(longBias)>=30&&shortPause>=45)state='趋势潜伏';
     else if(Math.abs(longBias)>=20)state='早期线索';
-    return {score:+score.toFixed(2),state,direction:dir>0?'偏多':'偏空',components:{longBias:+longBias.toFixed(1),quarterTrend:+quarterTrend.toFixed(1),shortPause:+shortPause.toFixed(1),compression:+compression.toFixed(1),boundary:+boundary.toFixed(1),participation:+participation.toFixed(1)},metrics:{returnQuarter:rq,returnHalfYear:rh,returnYear:ry,efficiencyQuarter:er,atrRatio,rangePosition:pos,volumeRatio:vr,oiChange:oi,maQuarter:maQ,maHalfYear:maH,maYear:maY}};
+    return {score:+score.toFixed(2),state,direction:dir>0?'偏多':'偏空',periods:{longHorizon,shortHorizon,longMid,slopeLookback},components:{longBias:+longBias.toFixed(1),shortTrend:+shortTrend.toFixed(1),shortPause:+shortPause.toFixed(1),compression:+compression.toFixed(1),boundary:+boundary.toFixed(1),participation:+participation.toFixed(1)},metrics:{returnShort:rShort,returnLongMid:rMid,returnLong:rLong,efficiencyShort:er,atrRatio,rangePosition:pos,volumeRatio:vr,oiChange:oi,maShort,maLongMid:maMid,maLong,participationLookback}};
   }
 
   const evaluators={donchian:evalDonchian,ma:evalMA,macd:evalMACD,adx:evalADX,boll:evalBoll,longterm:evalLongterm,multi:evalMulti};
@@ -259,7 +265,7 @@
     }
   };
 
-  const api={version:'2.1.0',evaluate,evaluateEmergence,presets,indicators:{sma,emaSeries,std,atr,rsi,macd,dmiAdx,volumeRatio,oiChange,efficiencyRatio},utils:{clamp,pct}};
+  const api={version:'2.2.0',evaluate,evaluateEmergence,presets,indicators:{sma,emaSeries,std,atr,rsi,macd,dmiAdx,volumeRatio,oiChange,efficiencyRatio},utils:{clamp,pct}};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;
   if(typeof window!=='undefined')window.TrendEngine=api;
 })();
